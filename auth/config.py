@@ -20,10 +20,7 @@ def _comma_separated_env(name: str, default: str = "") -> List[str]:
     ]
 
 
-CORS_ORIGINS = _comma_separated_env(
-    "CORS_ORIGINS",
-    "http://localhost:3000,http://localhost:5173",
-)
+CORS_ORIGINS = _comma_separated_env("CORS_ORIGINS")
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production")
 ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
