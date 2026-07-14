@@ -36,21 +36,47 @@ create table if not exists public.posts (
     updated_at timestamp with time zone not null default now()
 );
 
-create table if not exists public.post_images (
+create table if not exists public.images (
     id uuid primary key default gen_random_uuid(),
-    post_id uuid not null references public.posts(id) on delete cascade,
-    image_path text not null,
+    post_id uuid references public.posts(id) on delete cascade,
+    image_role text not null default 'gallery'
+        check (image_role in ('cover', 'gallery')),
+    image_url text not null,
+    storage_bucket text not null default 'website',
+    storage_path text,
+    original_filename text,
+    content_type text,
+    size_bytes bigint check (size_bytes is null or size_bytes >= 0),
     caption text,
-    sort_order integer not null default 0,
+    sort_order integer not null default 0 check (sort_order >= 0),
+    created_by uuid references auth.users(id) on delete set null,
     created_at timestamp with time zone not null default now()
 );
+
+create table if not exists public.qr_links (
+    qr_id uuid primary key default gen_random_uuid(),
+    qr_name text not null
+        check (char_length(trim(qr_name)) between 1 and 120),
+    qr_url text not null check (qr_url ~* '^https?://'),
+    created_by uuid references auth.users(id) on delete set null,
+    created_at timestamp with time zone not null default now(),
+    updated_at timestamp with time zone not null default now()
+);
+
+drop policy if exists "Anyone can read QR links for published posts" on public.qr_links;
+alter table public.qr_links drop column if exists post_id;
 
 create index if not exists posts_type_id_idx on public.posts(type_id);
 create index if not exists posts_published_created_at_idx
     on public.posts(published, created_at desc);
 create index if not exists posts_featured_idx on public.posts(featured);
-create index if not exists post_images_post_id_sort_order_idx
-    on public.post_images(post_id, sort_order);
+create index if not exists images_post_id_sort_order_idx
+    on public.images(post_id, sort_order);
+create index if not exists images_created_by_idx on public.images(created_by);
+create unique index if not exists images_one_cover_per_post_idx
+    on public.images(post_id)
+    where image_role = 'cover' and post_id is not null;
+create index if not exists qr_links_created_by_idx on public.qr_links(created_by);
 
 create or replace function public.set_updated_at()
 returns trigger as $$
@@ -67,9 +93,17 @@ before update on public.posts
 for each row
 execute function public.set_updated_at();
 
+drop trigger if exists qr_links_set_updated_at on public.qr_links;
+
+create trigger qr_links_set_updated_at
+before update on public.qr_links
+for each row
+execute function public.set_updated_at();
+
 alter table public.post_types enable row level security;
 alter table public.posts enable row level security;
-alter table public.post_images enable row level security;
+alter table public.images enable row level security;
+alter table public.qr_links enable row level security;
 
 drop policy if exists "Anyone can read post types" on public.post_types;
 create policy "Anyone can read post types"
@@ -83,15 +117,15 @@ on public.posts
 for select
 using (published = true);
 
-drop policy if exists "Anyone can read images for published posts" on public.post_images;
+drop policy if exists "Anyone can read images for published posts" on public.images;
 create policy "Anyone can read images for published posts"
-on public.post_images
+on public.images
 for select
 using (
     exists (
         select 1
         from public.posts
-        where posts.id = post_images.post_id
+        where posts.id = images.post_id
           and posts.published = true
     )
 );

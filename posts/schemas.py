@@ -1,8 +1,8 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class PostType(BaseModel):
@@ -12,7 +12,16 @@ class PostType(BaseModel):
 
 
 class PostImageBase(BaseModel):
-    image_path: str = Field(min_length=1)
+    image_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("image_url", "image_path"),
+        serialization_alias="image_url",
+        description="Public URL returned by the image upload endpoint.",
+        examples=[
+            "https://your-project-ref.supabase.co/storage/v1/object/public/"
+            "website/posts/gallery/example.jpg"
+        ],
+    )
     caption: Optional[str] = None
     sort_order: Optional[int] = Field(default=None, ge=0)
 
@@ -22,7 +31,17 @@ class PostImageCreate(PostImageBase):
 
 
 class PostImageUpdate(BaseModel):
-    image_path: Optional[str] = Field(default=None, min_length=1)
+    image_path: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        validation_alias=AliasChoices("image_url", "image_path"),
+        serialization_alias="image_url",
+        description="Public URL returned by the image upload endpoint.",
+        examples=[
+            "https://your-project-ref.supabase.co/storage/v1/object/public/"
+            "website/posts/gallery/example.jpg"
+        ],
+    )
     caption: Optional[str] = None
     sort_order: Optional[int] = Field(default=None, ge=0)
 
@@ -30,16 +49,41 @@ class PostImageUpdate(BaseModel):
 class PostImage(BaseModel):
     id: UUID
     post_id: UUID
-    image_path: str
+    image_role: Literal["cover", "gallery"]
+    image_path: str = Field(
+        validation_alias=AliasChoices("image_url", "image_path"),
+        serialization_alias="image_url",
+        description="Public URL of the gallery image.",
+    )
     caption: Optional[str] = None
     sort_order: int = 0
     created_at: datetime
 
 
 class PostImageUpload(BaseModel):
+    image_id: UUID
     bucket: str
     path: str
+    url: str
     content_type: str
+
+
+class PostImageAttach(BaseModel):
+    post_id: UUID
+    image_role: Optional[Literal["cover", "gallery"]] = None
+    caption: Optional[str] = None
+    sort_order: Optional[int] = Field(default=None, ge=0)
+
+
+class ImageAttachRequest(BaseModel):
+    post_id: UUID
+    caption: Optional[str] = None
+    sort_order: Optional[int] = Field(default=None, ge=0)
+
+
+class ImageBatchAttachRequest(BaseModel):
+    post_id: UUID
+    image_ids: List[UUID] = Field(min_length=1)
 
 
 class PostCreate(BaseModel):
