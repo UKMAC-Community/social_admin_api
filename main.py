@@ -1,7 +1,8 @@
 from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from auth.config import APP_ENVIRONMENT, APP_NAME, APP_VERSION, CORS_ORIGINS
@@ -47,6 +48,19 @@ if CORS_ORIGINS:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+@app.middleware("http")
+async def reject_disallowed_browser_origins(request: Request, call_next):
+    origin = request.headers.get("origin")
+
+    if CORS_ORIGINS and origin and origin not in CORS_ORIGINS:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Origin is not allowed."},
+        )
+
+    return await call_next(request)
 
 
 @app.get(
