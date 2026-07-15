@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from auth.config import APP_ENVIRONMENT, APP_NAME, APP_VERSION, CORS_ORIGINS
 from auth.router import router as auth_router
 from posts.images_router import router as images_router
+from posts.public_router import router as public_posts_router
 from posts.router import router as posts_router
 from qr_links.router import router as qr_links_router
 
@@ -92,6 +93,11 @@ def health_check() -> HealthStatus:
 
 
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(
+    public_posts_router,
+    prefix="/public/posts",
+    tags=["Public Posts"],
+)
 app.include_router(posts_router, prefix="/posts", tags=["Posts"])
 app.include_router(images_router, prefix="/images", tags=["Images"])
 app.include_router(qr_links_router, prefix="/qr-links", tags=["QR Links"])

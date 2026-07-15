@@ -18,9 +18,10 @@ from auth.config import (
 )
 from auth.providers.supabase import get_supabase_admin_client
 from auth.schemas import SupabaseUser
-from auth.service import get_current_supabase_user, get_supabase_profile
+from auth.service import get_current_content_dashboard_user, get_current_supabase_user
 from posts.schemas import (
     Post,
+    PostContent,
     PostCreate,
     PostImage,
     PostImageAttach,
@@ -53,15 +54,7 @@ def _require_supabase_admin_config() -> None:
 def get_current_post_editor(
     current_user: SupabaseUser = Depends(get_current_supabase_user),
 ) -> SupabaseUser:
-    profile = get_supabase_profile(current_user.id)
-
-    if profile.role not in ("admin", "manager"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin or manager role is required",
-        )
-
-    return current_user
+    return get_current_content_dashboard_user(current_user)
 
 
 def _db_error(exc: APIError) -> HTTPException:
@@ -139,6 +132,169 @@ def _post_from_row(
         type=post_type,
         images=images or [],
     )
+
+
+def _post_content_from_legacy(content: str) -> PostContent:
+    blocks = []
+    if content.strip():
+        blocks.append(
+            {
+                "id": f"legacy-{uuid4()}",
+                "type": "paragraph",
+                "data": {"text": content},
+            }
+        )
+    return PostContent.model_validate({"version": 1, "blocks": blocks})
+
+
+def _legacy_content_from_blocks(content: PostContent) -> str:
+    text_parts: List[str] = []
+
+    for block in content.blocks:
+        if block.type in ("paragraph", "heading"):
+            text_parts.append(block.data.text.strip())
+        elif block.type == "image":
+            text_parts.append((block.data.caption or block.data.alt).strip())
+        elif block.type == "gallery":
+            text_parts.extend(
+                (image.caption or image.alt).strip() for image in block.data.images
+            )
+
+    return "\n\n".join(part for part in text_parts if part)
+
+
+def _content_image_ids(content: PostContent) -> List[UUID]:
+    image_ids: List[UUID] = []
+    seen_ids = set()
+
+    for block in content.blocks:
+        if block.type == "image":
+            block_image_ids = [block.data.media_id]
+        elif block.type == "gallery":
+            block_image_ids = [image.media_id for image in block.data.images]
+        else:
+            block_image_ids = []
+
+        for image_id in block_image_ids:
+            if image_id not in seen_ids:
+                image_ids.append(image_id)
+                seen_ids.add(image_id)
+
+    return image_ids
+
+
+def _validate_content_image_references(
+    content: PostContent,
+    *,
+    editor_id: str,
+    post_id: Optional[UUID] = None,
+) -> List[dict]:
+    image_ids = _content_image_ids(content)
+    if not image_ids:
+        return []
+
+    serialized_ids = [str(image_id) for image_id in image_ids]
+    client = _client()
+    try:
+        response = (
+            client.table(SUPABASE_IMAGES_TABLE)
+            .select("id,post_id,created_by,image_url")
+            .in_("id", serialized_ids)
+            .execute()
+        )
+    except APIError as exc:
+        raise _db_error(exc) from exc
+
+    rows_by_id = {str(row["id"]): row for row in response.data or []}
+    if set(rows_by_id) != set(serialized_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content references an image that does not exist",
+        )
+
+    serialized_post_id = str(post_id) if post_id is not None else None
+    for image_id in serialized_ids:
+        row = rows_by_id[image_id]
+        attached_post_id = row.get("post_id")
+        is_owned_staged_image = (
+            attached_post_id is None and str(row.get("created_by")) == str(editor_id)
+        )
+        is_attached_to_post = (
+            serialized_post_id is not None
+            and str(attached_post_id) == serialized_post_id
+        )
+        if not is_owned_staged_image and not is_attached_to_post:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Content images must be staged by the current editor or already "
+                    "attached to this post"
+                ),
+            )
+
+    return [rows_by_id[image_id] for image_id in serialized_ids]
+
+
+def _content_json_references_image(content_json: object, image_id: UUID) -> bool:
+    if not isinstance(content_json, dict):
+        return False
+
+    serialized_id = str(image_id)
+    blocks = content_json.get("blocks")
+    if not isinstance(blocks, list):
+        return False
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        data = block.get("data")
+        if not isinstance(data, dict):
+            continue
+
+        if block.get("type") == "image":
+            media_id = data.get("media_id", data.get("mediaId"))
+            if str(media_id) == serialized_id:
+                return True
+        elif block.get("type") == "gallery":
+            images = data.get("images")
+            if not isinstance(images, list):
+                continue
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                media_id = image.get("media_id", image.get("mediaId"))
+                if str(media_id) == serialized_id:
+                    return True
+
+    return False
+
+
+def _ensure_image_is_not_referenced(image: dict) -> None:
+    post_id = image.get("post_id")
+    if not post_id:
+        return
+
+    client = _client()
+    try:
+        response = (
+            client.table(SUPABASE_POSTS_TABLE)
+            .select("content_json")
+            .eq("id", str(post_id))
+            .limit(1)
+            .execute()
+        )
+    except APIError as exc:
+        raise _db_error(exc) from exc
+
+    rows = response.data or []
+    if rows and _content_json_references_image(
+        rows[0].get("content_json"),
+        UUID(str(image["id"])),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Remove this image from the post content before deleting it",
+        )
 
 
 def _get_post_type(type_id: int) -> PostType:
@@ -518,7 +674,7 @@ def _attach_staged_cover_by_url(post_id: UUID, image_url: str) -> None:
         )
 
 
-def delete_image(image_id: UUID) -> None:
+def delete_image(image_id: UUID, *, allow_referenced: bool = False) -> None:
     client = _client()
     try:
         result = (
@@ -539,6 +695,9 @@ def delete_image(image_id: UUID) -> None:
         )
 
     image = rows[0]
+    if not allow_referenced:
+        _ensure_image_is_not_referenced(image)
+
     storage_path = image.get("storage_path")
     if storage_path:
         try:
@@ -745,10 +904,23 @@ def _next_image_sort_order(post_id: UUID) -> int:
 def create_post(payload: PostCreate, created_by: str) -> Post:
     _get_post_type(payload.type_id)
 
+    content_json = payload.content_json or _post_content_from_legacy(
+        payload.content or ""
+    )
+    _validate_content_image_references(
+        content_json,
+        editor_id=created_by,
+    )
+
     row = {
         "title": payload.title,
         "slug": payload.slug or _slugify(payload.title),
-        "content": payload.content,
+        "content": (
+            _legacy_content_from_blocks(content_json)
+            if payload.content_json is not None
+            else payload.content or ""
+        ),
+        "content_json": content_json.model_dump(mode="json"),
         "type_id": payload.type_id,
         "cover_image": payload.cover_image,
         "published": payload.published,
@@ -776,8 +948,32 @@ def create_post(payload: PostCreate, created_by: str) -> Post:
     return get_post(post_id, published_only=False)
 
 
-def update_post(post_id: UUID, payload: PostUpdate) -> Post:
-    update_data = payload.model_dump(exclude_unset=True, exclude={"images"})
+def update_post(post_id: UUID, payload: PostUpdate, editor_id: str) -> Post:
+    update_data = payload.model_dump(
+        mode="json",
+        exclude_unset=True,
+        exclude={"content_json", "images"},
+    )
+    if payload.content_json is not None:
+        if payload.images is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Update structured content and the legacy image list in separate "
+                    "requests"
+                ),
+            )
+        _validate_content_image_references(
+            payload.content_json,
+            editor_id=editor_id,
+            post_id=post_id,
+        )
+        update_data["content_json"] = payload.content_json.model_dump(mode="json")
+        update_data["content"] = _legacy_content_from_blocks(payload.content_json)
+    elif "content" in payload.model_fields_set and payload.content is not None:
+        update_data["content_json"] = _post_content_from_legacy(
+            payload.content
+        ).model_dump(mode="json")
 
     if "type_id" in update_data:
         _get_post_type(update_data["type_id"])
@@ -831,7 +1027,7 @@ def delete_post(post_id: UUID) -> None:
             .execute()
         )
         for image in image_response.data or []:
-            delete_image(UUID(image["id"]))
+            delete_image(UUID(image["id"]), allow_referenced=True)
 
         response = (
             client.table(SUPABASE_POSTS_TABLE)

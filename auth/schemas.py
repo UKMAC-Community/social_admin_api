@@ -1,9 +1,8 @@
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
-
-UserRole = Literal["admin", "manager"]
+from auth.roles import UserRole
 
 
 class SupabaseSession(BaseModel):

@@ -9,6 +9,12 @@ from auth.config import (
     SUPABASE_URL,
 )
 from auth.providers.supabase import get_supabase_admin_client, get_supabase_client
+from auth.roles import (
+    CONTENT_DASHBOARD_ROLES,
+    STAFF_DASHBOARD_ROLES,
+    USER_MANAGEMENT_ROLES,
+    role_values,
+)
 from auth.schemas import (
     SupabaseCreateUserRequest,
     SupabaseProfile,
@@ -151,18 +157,50 @@ def get_supabase_profile(user_id: str) -> SupabaseProfile:
     return _profile_from_row(rows[0])
 
 
-def get_current_admin_user(
-    current_user: SupabaseUser = Depends(get_current_supabase_user),
+def require_current_user_role(
+    current_user: SupabaseUser,
+    allowed_roles: set[str],
+    detail: str,
 ) -> SupabaseUser:
     profile = get_supabase_profile(current_user.id)
 
-    if profile.role != "admin":
+    if profile.role is None or profile.role.value not in allowed_roles:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin role is required",
+            detail=detail,
         )
 
     return current_user
+
+
+def get_current_admin_user(
+    current_user: SupabaseUser = Depends(get_current_supabase_user),
+) -> SupabaseUser:
+    return require_current_user_role(
+        current_user,
+        role_values(USER_MANAGEMENT_ROLES),
+        "Admin role is required",
+    )
+
+
+def get_current_content_dashboard_user(
+    current_user: SupabaseUser = Depends(get_current_supabase_user),
+) -> SupabaseUser:
+    return require_current_user_role(
+        current_user,
+        role_values(CONTENT_DASHBOARD_ROLES),
+        "Content dashboard access is required",
+    )
+
+
+def get_current_staff_dashboard_user(
+    current_user: SupabaseUser = Depends(get_current_supabase_user),
+) -> SupabaseUser:
+    return require_current_user_role(
+        current_user,
+        role_values(STAFF_DASHBOARD_ROLES),
+        "Staff dashboard access is required",
+    )
 
 
 def create_supabase_user(payload: SupabaseCreateUserRequest) -> SupabaseProfile:
@@ -170,7 +208,7 @@ def create_supabase_user(payload: SupabaseCreateUserRequest) -> SupabaseProfile:
 
     client = get_supabase_admin_client()
     user_metadata = {
-        "role": payload.role,
+        "role": payload.role.value,
         "full_name": payload.full_name,
     }
 
@@ -198,7 +236,7 @@ def create_supabase_user(payload: SupabaseCreateUserRequest) -> SupabaseProfile:
     profile_data = {
         "id": user.id,
         "email": user.email,
-        "role": payload.role,
+        "role": payload.role.value,
         "full_name": payload.full_name,
     }
     profile_response = (

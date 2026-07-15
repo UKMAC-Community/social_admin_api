@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 
 from auth.schemas import SupabaseUser
+from posts.cache_headers import set_no_store_headers
 from posts.schemas import (
     Post,
     PostCreate,
@@ -52,12 +53,14 @@ def post_types():
     description="Return published posts with optional filtering and pagination.",
 )
 def public_posts(
+    response: Response,
     featured: Optional[bool] = None,
     type_id: Optional[int] = None,
     type_slug: Optional[str] = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
+    set_no_store_headers(response)
     return list_posts(
         published=True,
         featured=featured,
@@ -112,7 +115,8 @@ def admin_post(
     summary="Get published post by slug",
     include_in_schema=False,
 )
-def public_post_by_slug(slug: str):
+def public_post_by_slug(slug: str, response: Response):
+    set_no_store_headers(response)
     return get_post_by_slug(slug, published_only=True)
 
 
@@ -253,7 +257,8 @@ async def upload_multiple_gallery_images(
     summary="Get post",
     description="Return one published post by its unique identifier.",
 )
-def public_post(post_id: UUID):
+def public_post(post_id: UUID, response: Response):
+    set_no_store_headers(response)
     return get_post(post_id, published_only=True)
 
 
@@ -280,9 +285,9 @@ def create_post_endpoint(
 def update_post_endpoint(
     post_id: UUID,
     payload: PostUpdate,
-    _: SupabaseUser = Depends(get_current_post_editor),
+    current_user: SupabaseUser = Depends(get_current_post_editor),
 ):
-    return update_post(post_id, payload)
+    return update_post(post_id, payload, current_user.id)
 
 
 @router.delete(
