@@ -78,6 +78,7 @@ def public_posts(
     include_in_schema=False,
 )
 def admin_posts(
+    response: Response,
     published: Optional[bool] = None,
     featured: Optional[bool] = None,
     type_id: Optional[int] = None,
@@ -86,6 +87,7 @@ def admin_posts(
     offset: int = Query(default=0, ge=0),
     _: SupabaseUser = Depends(get_current_post_editor),
 ):
+    set_no_store_headers(response)
     return list_posts(
         published=published,
         featured=featured,
@@ -104,8 +106,10 @@ def admin_posts(
 )
 def admin_post(
     post_id: UUID,
+    response: Response,
     _: SupabaseUser = Depends(get_current_post_editor),
 ):
+    set_no_store_headers(response)
     return get_post(post_id, published_only=False)
 
 

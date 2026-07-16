@@ -68,6 +68,50 @@ class PostContentSchemaTests(unittest.TestCase):
             "Article heading\n\nArticle paragraph\n\nWide photo\n\nFirst\n\nSecond",
         )
 
+    def test_legacy_content_skips_filename_like_alt_text(self) -> None:
+        image_id = uuid4()
+        second_image_id = uuid4()
+        content = PostContent.model_validate(
+            {
+                "version": 1,
+                "blocks": [
+                    {
+                        "id": "paragraph-1",
+                        "type": "paragraph",
+                        "data": {"text": "Real caption text"},
+                    },
+                    {
+                        "id": "image-1",
+                        "type": "image",
+                        "data": {
+                            "media_id": str(image_id),
+                            "alt": "telegram-cloud-document-5-6251306229105173422.jpg",
+                        },
+                    },
+                    {
+                        "id": "gallery-1",
+                        "type": "gallery",
+                        "data": {
+                            "layout": "grid",
+                            "columns": 2,
+                            "images": [
+                                {"media_id": str(image_id), "alt": "IMG_20240101.png"},
+                                {
+                                    "media_id": str(second_image_id),
+                                    "alt": "A meaningful description",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            }
+        )
+
+        self.assertEqual(
+            _legacy_content_from_blocks(content),
+            "Real caption text\n\nA meaningful description",
+        )
+
     def test_rejects_invalid_block_documents(self) -> None:
         image_id = uuid4()
         invalid_documents = [

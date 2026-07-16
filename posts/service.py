@@ -147,6 +147,13 @@ def _post_content_from_legacy(content: str) -> PostContent:
     return PostContent.model_validate({"version": 1, "blocks": blocks})
 
 
+_FILENAME_PATTERN = re.compile(r"\.(jpe?g|png|gif|webp|svg)$", re.IGNORECASE)
+
+
+def _is_filename_like(text: str) -> bool:
+    return bool(_FILENAME_PATTERN.search(text))
+
+
 def _legacy_content_from_blocks(content: PostContent) -> str:
     text_parts: List[str] = []
 
@@ -154,11 +161,14 @@ def _legacy_content_from_blocks(content: PostContent) -> str:
         if block.type in ("paragraph", "heading"):
             text_parts.append(block.data.text.strip())
         elif block.type == "image":
-            text_parts.append((block.data.caption or block.data.alt).strip())
+            text = (block.data.caption or block.data.alt).strip()
+            if text and not _is_filename_like(text):
+                text_parts.append(text)
         elif block.type == "gallery":
-            text_parts.extend(
-                (image.caption or image.alt).strip() for image in block.data.images
-            )
+            for image in block.data.images:
+                text = (image.caption or image.alt).strip()
+                if text and not _is_filename_like(text):
+                    text_parts.append(text)
 
     return "\n\n".join(part for part in text_parts if part)
 
